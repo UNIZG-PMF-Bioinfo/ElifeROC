@@ -75,7 +75,6 @@ allEpigenomeTables<-mclapply(list.files(pattern=".bw"), function(x)MakeAnEpigenS
 names(allEpigenomeTables) <- str_extract(list.files(pattern=".bw"), ".*(?=(_sequence))")
 allEpigenomeTables <- do.call("rbind",allEpigenomeTables)
 Epigens <- dcast(allEpigenomeTables, region_id + distanceToNearestProteinCoding ~ Epigen,value.var="Score")
-saveRDS(Epigens, "genomeTilesWithAddedEpigenScores.RDS")
 
 #Preparing the Integration sites table:
 bix<-fread("BIXhg38.bed")
@@ -90,3 +89,52 @@ bixepi<-merge(bix,Epigens, all.x=T)
 bixepi<-bixepi[!is.na(bixepi$D75_Ledgf)] # excluding blacklisted integration sites!
 
 saveRDS(bixepi, file="BIX_hg38_withEpigenValues.RDS")
+
+                             
+bixepi[,dist:=distanceToNearestProteinCoding%/%1000]
+Epigens[,dist:=distanceToNearestProteinCoding%/%1000]
+bixepisplit<-split(bixepi,bixepi$V5)
+thismanytotakeBIX <- table(bixepisplit[["BIX"]]$dist)
+thismanytotakeCONTROL <- table(bixepisplit[["CONTROL"]]$dist)
+Epigens$takeThisManyBIX <- 0
+Epigens$takeThisManyCONTROL <- 0
+TAKETHATBIX<-thismanytotakeBIX[as.character(Epigens[dist%in%as.numeric(names(thismanytotakeBIX)),dist])]
+Epigens[dist%in%as.numeric(names(thismanytotakeBIX)),"takeThisManyBIX"] <- TAKETHATBIX
+TAKETHATCONTROL<-thismanytotakeCONTROL[as.character(Epigens[dist%in%as.numeric(names(thismanytotakeCONTROL)),dist])]
+Epigens[dist%in%as.numeric(names(thismanytotakeCONTROL)),"takeThisManyCONTROL"] <- TAKETHATCONTROL
+
+saveRDS(Epigens, "genomeTilesWithAddedEpigenScores.RDS")
+set.seed(5555)
+BIXmatched <- replicate(10,Epigens[, .SD[sample(.N, takeThisManyBIX, replace = T)], dist][order(-dist)])
+CONTROLmatched <- replicate(10,Epigens[, .SD[sample(.N, takeThisManyCONTROL, replace = T)], dist][order(-dist)])
+
+
+doItForCONTROLEpigen <- function(epiname){
+  mean(do.call("cbind",CONTROLmatched[epiname,])>unlist(bixepisplit[["CONTROL"]][order(-dist)][,..epiname]))
+}
+
+doItForBIXEpigen <- function(epiname){
+  mean(do.call("cbind",BIXmatched[epiname,])>unlist(bixepisplit[["BIX"]][order(-dist)][,..epiname]))
+}
+epinames <- c("D75_H3K36me3","D75_Input","D75_bixH3K36me3","D75_bixInput","D86_H3K36me3", "D86_Input","D86_bixH3K36me3","D86_bixInput","D75_H3K9me2","D75_Ledgf","D75_bixH3K9me2","D75_bixledgf","D86_H3K9me2","D86_Ledgf","D86_bixH3K9me2","D86_bixledgf" )
+CTRL<-sapply(epinames,doItForCONTROLEpigen)
+BIX<-sapply(epinames,doItForBIXEpigen)
+x <- data.table(CTRL,BIX)
+#####################################
+
+# WHEN NOT MATCHED BY DIST TO NEAREST GENE:
+BIXNOTmatched <- replicate(10,Epigens[, .SD[sample(.N, 635, replace = T)], dist][order(-dist)])
+CONTROLNOTmatched <- replicate(10,Epigens[, .SD[sample(.N, 449, replace = T)], dist][order(-dist)])
+UNMAdoItForCONTROLEpigen <- function(epiname){
+  mean(do.call("cbind",CONTROLNOTmatched[epiname,])>unlist(bixepisplit[["CONTROL"]][order(-dist)][,..epiname]))
+}
+
+UNMAdoItForBIXEpigen <- function(epiname){
+  mean(do.call("cbind",BIXNOTmatched[epiname,])>unlist(bixepisplit[["BIX"]][order(-dist)][,..epiname]))
+}
+epinames <- c("D75_H3K36me3","D75_Input","D75_bixH3K36me3","D75_bixInput","D86_H3K36me3", "D86_Input","D86_bixH3K36me3","D86_bixInput","D75_H3K9me2","D75_Ledgf","D75_bixH3K9me2","D75_bixledgf","D86_H3K9me2","D86_Ledgf","D86_bixH3K9me2","D86_bixledgf" )
+UNMACTRL<-sapply(epinames,UNMAdoItForCONTROLEpigen)
+UNMABIX<-sapply(epinames,UNMAdoItForBIXEpigen)
+xUNMA <- data.table(UNMACTRL,UNMABIX)
+
+
