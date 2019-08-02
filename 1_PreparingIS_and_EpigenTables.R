@@ -3,23 +3,72 @@ library(data.table)
 duljinekromosoma <- readRDS("duljinekromosoma.RDS")
 
 # Preparing the table with values of all epigenetic marks:
+# I will create a table with 1kb tiles with values of epigenetic marks on those tiles. 
+# This table will exclude blacklisted regions.
+# I will also add distance to nearest protein coding gene to each tile. 
+# This table will be used later to create random matched controls and also to 
+# add scores to integration sites based on tiles the integrations are in.
+
+#1. Create a table with 1kb regions on the genome. 
+cs <- readRDS("duljinekromosoma.RDS")
+genomeTiles <- unlist(tileGenome(cs, tilewidth=1000))
+
+#2. Remove those which are blacklisted.
+blacklisted <- fread("hg38-blacklist.v2.bed")
+blacklistedRegions <- GRanges(blacklisted$V1, IRanges(blacklisted$V2, blacklisted$V3), reason=blacklisted$V4)
+rm(blacklisted)
+genomeTiles <- genomeTiles[countOverlaps(genomeTiles, blacklistedRegions, ignore.strand=T)>0]
+
+#3. Add DistanceToNearestGene
+## 3.1. get genes from biomaRt
+
+ensembl <- useMart("ensembl")
+ensembl <- useDataset("hsapiens_gene_ensembl",mart=ensembl)
+atts <- c("ensembl_gene_id","chromosome_name","start_position","end_position","strand","gene_biotype")
+allGenes <- getBM(attributes=atts, mart=ensembl)
+colnames(allGenes) <- c("ensembl_gene_id", "chr","start","end","strand","biotype")
+allGenes$chr <- paste("chr", as.character(allGenes$chr), sep="")
+allGenes$strand <- ifelse(allGenes$strand=="1","+",ifelse(allGenes$strand=="-1","-","*"))
+allGenes <- GRanges(allGenes)
+proteinCodingGenes <- allGenes[allGenes$biotype=="protein_coding"]
+proteinCodingGenes <- proteinCodingGenes[seqnames(proteinCodingGenes)%in%names(cs)]
+
+##3.2. Add DistanceToNearestGene to genomeTiles:
+genomeTiles$distanceToNearestProteinCoding <- data.frame(distanceToNearest(genomeTiles, proteinCodingGenes, ignore.strand=T), 
+                                                          stringsAsFactors=F)$distance
+genomeTiles <- as.data.table(genomeTiles)
+genomeTiles <- genomeTiles[,c(1:3,6)]
+genomeTiles[,region_id:=paste(seqnames,start%/%1000,sep="_")]
+setkey(genomeTiles,seqnames,start,end)
+# Preparing the table with values of all epigenetic marks:
 # Marks are saved in files named Samplename_Epigenmark_sequence.bw
+
+
 MakeAnEpigenScoreTable <- function(test_bw){
   gr <- import(test_bw)
   gr<-gr[seqnames(gr)%in%names(duljinekromosoma)]
   ddt <- as.data.table(gr)
-  ddt[,region:=start%/%1000]
-  ddt[,region_id:=paste(seqnames,region,sep="_")]
-  ddt[,Score:=sum(score*width)/sum(width),by=region_id]
-  ddt[,Epigen:=str_extract(test_bw, ".*(?=(_sequence))")]
-  ddt[,.N, .(Epigen,region_id,Score)][,.(Epigen,region_id,Score)]
+  # find overlaps of 1kb tiles with the bigWig epigenomic score track:
+  # some regions in bw file are longer than 1kb. For those region, each tile overlaps with unique region. 
+  # So the score of those tiles is equal to the score for the region it overlaps with.
+  # (This is true if bw contains MEAN values instead of SUM values on the interval, which it does.)
+  # So first I handle those regions:
+  setkey(ddt,seqnames,start,end)
+  genomeTiles <- foverlaps(genomeTiles,ddt)
+  genomeTiles[,overlapStart:=ifelse(i.start>start,i.start,start),]
+  genomeTiles[,overlapEnd:=ifelse(i.end>end,end,i.end),]
+  genomeTiles[,overlapWidth:=overlapEnd-overlapStart+1,]
+  genomeTiles[,Score:=sum(overlapWidth*score)/sum(overlapWidth),region_id]
+  genomeTiles <- genomeTiles[,.N,.(region_id,distanceToNearestProteinCoding,Score)][,.(region_id,distanceToNearestProteinCoding,Score)]
+  genomeTiles[,Epigen:=str_extract(test_bw, ".*(?=(_sequence))")]
+  genomeTiles[,.(Epigen,region_id,Score,distanceToNearestProteinCoding)]
 }
 
 allEpigenomeTables<-lapply(list.files(pattern=".bw"), function(x)MakeAnEpigenScoreTable(x))
 names(allEpigenomeTables) <- str_extract(list.files(pattern=".bw"), ".*(?=(_sequence))")
 allEpigenomeTables <- do.call("rbind",allEpigenomeTables)
 Epigens<- dcast(allEpigenomeTables, region_id ~ Epigen , value.var="Score", fill=0)
-saveRDS(Epigens, "allEpigenomeTables.RDS")
+saveRDS(Epigens, "genomeTilesWithAddedEpigenScores.RDS")
 
 #Preparing the Integration sites table:
 bix<-fread("BIXhg38.bed")
