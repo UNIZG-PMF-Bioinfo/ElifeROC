@@ -1,5 +1,8 @@
 library(rtracklayer)
 library(data.table)
+library(parallel) #needs a lot of RAM, 200G is recommended, 80 not enough, run withsouth parallel option with less RAM
+library(biomaRt)
+library(stringr)
 duljinekromosoma <- readRDS("duljinekromosoma.RDS")
 
 # Preparing the table with values of all epigenetic marks:
@@ -66,7 +69,9 @@ MakeAnEpigenScoreTable <- function(test_bw){
   genomeTiles[,.(Epigen,region_id,Score,distanceToNearestProteinCoding)]
 }
 
-allEpigenomeTables<-lapply(list.files(pattern=".bw"), function(x)MakeAnEpigenScoreTable(x))
+allEpigenomeTables<-mclapply(list.files(pattern=".bw"), function(x)MakeAnEpigenScoreTable(x), mc.cores=10)
+# The option that runs slower but consumes less RAM:
+#allEpigenomeTables<-lapply(list.files(pattern=".bw"), function(x)MakeAnEpigenScoreTable(x))
 names(allEpigenomeTables) <- str_extract(list.files(pattern=".bw"), ".*(?=(_sequence))")
 allEpigenomeTables <- do.call("rbind",allEpigenomeTables)
 Epigens <- dcast(allEpigenomeTables, region_id + distanceToNearestProteinCoding ~ Epigen,value.var="Score")
@@ -82,4 +87,6 @@ setkey(Epigens,region_id)
 setkey(bix,region_id)
 
 bixepi<-merge(bix,Epigens, all.x=T)
+bixepi<-bixepi[!is.na(bixepi$D75_Ledgf)] # excluding blacklisted integration sites!
+
 saveRDS(bixepi, file="BIX_hg38_withEpigenValues.RDS")
