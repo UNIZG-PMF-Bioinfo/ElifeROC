@@ -13,3 +13,5 @@ Generate random atched control integration sites, 10 for each read integration s
 # Comparison of Epigenetic marks scores on CTRL IS VS BIX IS:
 
 ![](https://github.com/UNIZG-PMF-Bioinfo/ElifeROC/blob/master/p%20values%20CTRL%20VS%20BIX%20IS%20Epigens.PNG)
+
+### Try also BIX Epigen Marks on BIX IS VS No bix on CTRL
